@@ -41,19 +41,35 @@ runs:
         echo "reward_link_url=$reward_link" >> "$GITHUB_OUTPUT"
 
     - name: Comment reward link on PR
+      id: call_api
       shell: bash
-      env:
-        GITHUB_TOKEN: ${{ inputs.github_token }}
       run: |
-        pr_number=$(jq --raw-output .pull_request.number "$GITHUB_EVENT_PATH")
-        pr_author=$(jq --raw-output .pull_request.user.login "$GITHUB_EVENT_PATH")
-        repo="${{ github.repository }}"
-        reward_link="${{ steps.call_api.outputs.reward_link_url }}"
-
-        comment_body="🎉 Hey @${pr_author}, you've been allowlisted!\nHere’s your reward link: [$reward_link]($reward_link)"
-
-        curl -s -X POST \
-          -H "Authorization: Bearer $GITHUB_TOKEN" \
+        echo "Sending allowlist request..."
+        response=$(curl -s -w "|||%{http_code}" -X POST "https://api.example.com/v1/activities/${{ inputs.activity_id }}/allowlist/github-ids/${{ inputs.github_user_id }}" \
+          -H "x-api-key: ${{ inputs.x_api_key }}" \
+          -H "x-partner-id: ${{ inputs.x_partner_id }}" \
           -H "Content-Type: application/json" \
-          -d "$(jq -n --arg body "$comment_body" '{body: $body}')" \
-          "https://api.github.com/repos/$repo/issues/$pr_number/comments"
+          -d '{}')
+
+        # Split response and HTTP status
+        http_body=$(echo "$response" | cut -d '|' -f 1)
+        http_code=$(echo "$response" | awk -F '|||' '{print $NF}')
+
+        echo "HTTP status: $http_code"
+
+        if [[ "$http_code" != 2* ]]; then
+          echo "❌ API call failed with status $http_code"
+          echo "Response body: $http_body"
+          exit 1
+        fi
+
+        reward_link=$(echo "$http_body" | jq -r '.data.reward_link_url // empty')
+
+        if [ -z "$reward_link" ]; then
+          echo "❌ reward_link_url not found in response."
+          echo "Response body: $http_body"
+          exit 1
+        fi
+
+        echo "✅ Received reward link: $reward_link"
+        echo "reward_link_url=$reward_link" >> "$GITHUB_OUTPUT"
